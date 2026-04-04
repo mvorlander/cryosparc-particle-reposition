@@ -10,6 +10,20 @@ It is the inverse visualization of a normal 2D classification workflow:
 
 This repository is designed to run locally on any machine with Python and filesystem access to the CryoSPARC project directory. It does not require Slurm and it does not call the CryoSPARC API.
 
+## Acknowledgements and Prior Work
+
+This repository is a new, independent implementation of the ReconSil concept for CryoSPARC `select_2D` jobs.
+
+It is conceptually inspired by the ReconSil method described by Thomas C. R. Miller and colleagues in:
+
+- Miller, T. C. R. et al. "Mechanism of head-to-head MCM double-hexamer formation revealed by cryo-EM." Nature 575, 704-710 (2019).
+  https://www.nature.com/articles/s41586-019-1768-0
+- Greiwe, J. F. et al. "In silico reconstitution of DNA replication. Lessons from single-molecule imaging and cryo-tomography applied to single-particle cryo-EM." Current Opinion in Structural Biology 72, 279-286 (2022).
+  https://www.sciencedirect.com/science/chapter/bookseries/pii/S0076687922000830
+  PubMed: https://pubmed.ncbi.nlm.nih.gov/35026552/
+
+This repository does not contain the original ReconSil source code. It should be understood as a fresh implementation of the same general idea, adapted for CryoSPARC `.cs` datasets, local Python environments, and direct command-line use.
+
 ## Features
 
 - Works on CryoSPARC `select_2D` jobs directly from disk
