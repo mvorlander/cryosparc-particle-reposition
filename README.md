@@ -12,11 +12,9 @@ This repository is designed to run locally on any machine with Python and filesy
 
 ## Example Output
 
-Real blink GIF generated from:
+GIF generated from two  two "Select 2D classes" jobs, overlad onto denoised micrograph, one in black and one in white.
 
-- primary `select_2D` job `J46`
-- secondary `select_2D` job `J98`
-- denoise job `J10`
+
 
 ![Example blink overlay](docs/media/j46_j98_j10_denoised_overlay_example.blink.gif)
 
