@@ -42,7 +42,12 @@ DEFAULT_GIF_DOWNSAMPLE = 1
 DEFAULT_GIF_FRAME_MS = 500
 SELECT2D_JOB_TYPE = "select_2D"
 LOCAL_REFINE_JOB_TYPE = "new_local_refine"
-REFINE3D_JOB_TYPES = ("homo_refine_new", "nonuniform_refine_new", "new_local_refine")
+REFINE3D_JOB_TYPES = (
+    "homo_refine_new",
+    "nonuniform_refine_new",
+    "new_local_refine",
+    "homo_reconstruct",
+)
 SOURCE_KIND_SELECT2D = "select2d"
 SOURCE_KIND_REFINE3D = "refine3d"
 

@@ -5,7 +5,7 @@
 Supported source types:
 
 - CryoSPARC `select_2D` jobs, using the chosen 2D class averages
-- CryoSPARC 3D refinement jobs such as `homo_refine_new`, `nonuniform_refine_new`, and `new_local_refine`, using per-particle backprojections from the refined volume
+- CryoSPARC 3D refinement or reconstruct-only jobs such as `homo_refine_new`, `nonuniform_refine_new`, `new_local_refine`, and `homo_reconstruct`, using per-particle backprojections from the refined volume
 
 It is the inverse visualization of a normal 2D classification or 3D refinement workflow:
 
