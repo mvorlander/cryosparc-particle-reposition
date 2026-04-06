@@ -1,18 +1,24 @@
 # cryosparc-2d-class-overlay
 
-`cryosparc-2d-class-overlay` is a local-first command-line tool that takes one or two CryoSPARC `select_2D` jobs and projects the chosen 2D class averages back onto the original micrographs or onto denoised micrographs.
+`cryosparc-2d-class-overlay` is a local-first command-line tool that takes one or two CryoSPARC overlay sources and projects their per-particle signal back onto the original micrographs or onto denoised micrographs.
 
-It is the inverse visualization of a normal 2D classification workflow:
+Supported source types:
+
+- CryoSPARC `select_2D` jobs, using the chosen 2D class averages
+- CryoSPARC 3D refinement jobs such as `homo_refine_new`, `nonuniform_refine_new`, and `new_local_refine`, using per-particle backprojections from the refined volume
+
+It is the inverse visualization of a normal 2D classification or 3D refinement workflow:
 
 - CryoSPARC stores, for each selected particle, the class assignment, in-plane rotation, translation, and micrograph coordinates.
-- This tool reads those fields from the CryoSPARC `.cs` files and stamps the selected class averages back onto the corresponding micrographs.
+- For refinement jobs, CryoSPARC stores per-particle 3D poses, shifts, and a refined 3D map.
+- This tool reads those fields from the CryoSPARC `.cs` files and stamps either the selected class averages or per-particle 3D map backprojections back onto the corresponding micrographs.
 - The result is a per-micrograph overlay PNG, a synthetic-only PNG, and a blink GIF by default.
 
 This repository is designed to run locally on any machine with Python and filesystem access to the CryoSPARC project directory. It does not require Slurm and it does not call the CryoSPARC API.
 
 ## Example Output
 
-GIF generated from two  two "Select 2D classes" jobs, overlad onto denoised micrograph, one in black and one in white.
+GIF generated from two `select_2D` jobs overlaid onto a denoised micrograph, one in black and one in white.
 
 
 
@@ -20,7 +26,7 @@ GIF generated from two  two "Select 2D classes" jobs, overlad onto denoised micr
 
 ## Acknowledgements and Prior Work
 
-This repository is a new, independent implementation of the ReconSil concept for CryoSPARC `select_2D` jobs.
+This repository is a new, independent implementation of the ReconSil concept for CryoSPARC overlay sources.
 
 It is conceptually inspired by the ReconSil method described by Thomas C. R. Miller and colleagues in:
 
@@ -38,9 +44,11 @@ This repository does not contain the original ReconSil source code. It should be
 
 ## Features
 
-- Works on CryoSPARC `select_2D` jobs directly from disk
-- Supports one or two Select 2D jobs at the same time
+- Works on CryoSPARC `select_2D` jobs and supported 3D refinement jobs directly from disk
+- Supports one or two overlay sources at the same time
 - Supports rendering onto denoised micrographs from a CryoSPARC denoise job
+- Supports per-particle 3D refinement-map backprojections
+- Supports cached 3D backprojections by quantized angular bins for speed
 - Writes:
   - `.overlay.png`
   - `.synthetic.png`
@@ -115,6 +123,22 @@ cryosparc-2d-class-overlay \
   --overlay-color-2 red
 ```
 
+### Single 3D refinement job
+
+```bash
+cryosparc-2d-class-overlay \
+  --job-dir /path/to/CS-project/J95
+```
+
+### 3D refinement job onto denoised micrographs
+
+```bash
+cryosparc-2d-class-overlay \
+  --job-dir /path/to/CS-project/J95 \
+  --denoise-job-dir /path/to/CS-project/J10 \
+  --projection-angle-step-deg 5
+```
+
 ### Render onto denoised micrographs
 
 ```bash
@@ -151,6 +175,7 @@ By default the tool writes into:
 
 If `--job-dir-2` is used, the second job name is appended.
 If `--denoise-job-dir` is used, the denoise job name is appended.
+If any source is a 3D refinement job, the default base folder changes to `particle_reprojection_overlay` instead of `<subset>_2d_class_overlay`.
 
 Each rendered micrograph produces:
 
@@ -168,6 +193,8 @@ The output folder also contains `overlay_summary.tsv` with total and per-job par
 - For the tested CryoSPARC outputs, the best-matching transform convention is:
   - rotate by `+alignments2D/pose`
   - shift by `-alignments2D/shift`
+- For tested CryoSPARC refinement outputs, the current 3D implementation uses `alignments3D/pose` as a rotation vector, projects the refined map after rotation, then applies `-alignments3D/shift`.
+- For 3D refinement sources, `--projection-angle-step-deg` controls an on-demand projection cache. The default `5` degree binning is much faster than exact per-particle projection; set it to `0` to disable quantization.
 - CryoSPARC motion-corrected micrographs may use MRC mode `12` half-floats; this is supported.
 
 ## Development

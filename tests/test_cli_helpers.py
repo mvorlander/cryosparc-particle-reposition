@@ -4,9 +4,13 @@ import numpy as np
 
 from cryosparc_2d_class_overlay.cli import (
     OverlaySource,
+    SOURCE_KIND_REFINE3D,
+    SOURCE_KIND_SELECT2D,
+    find_latest_job_file,
     harmonic_mean,
     normalize_field_label,
     parse_rgb_color,
+    quantize_pose3d,
     rank_micrograph_items,
     resolve_synthetic_background_color,
 )
@@ -33,8 +37,8 @@ def test_resolve_synthetic_background_color_auto_uses_white_for_dark_overlay():
 
 def test_rank_micrograph_items_balanced_prefers_shared_signal():
     sources = [
-        OverlaySource("J46", Path("/tmp/J46"), "selected", "black", parse_rgb_color("black"), {}, {}),
-        OverlaySource("J98", Path("/tmp/J98"), "selected", "red", parse_rgb_color("red"), {}, {}),
+        OverlaySource("J46", Path("/tmp/J46"), "selected", SOURCE_KIND_SELECT2D, "black", parse_rgb_color("black"), {}, None, {}),
+        OverlaySource("J98", Path("/tmp/J98"), "selected", SOURCE_KIND_SELECT2D, "red", parse_rgb_color("red"), {}, None, {}),
     ]
     items = [
         (Path("mic_a.mrc"), [list(range(80)), list(range(2))]),
@@ -43,3 +47,31 @@ def test_rank_micrograph_items_balanced_prefers_shared_signal():
     ]
     ranked = rank_micrograph_items(items, sources, "balanced", 3)
     assert ranked[0][0].name == "mic_c.mrc"
+
+
+def test_find_latest_job_file_prefers_latest_iteration(tmp_path: Path):
+    job_dir = tmp_path / "J95"
+    job_dir.mkdir()
+    (job_dir / "J95_001_particles.cs").write_text("")
+    (job_dir / "J95_004_particles.cs").write_text("")
+    (job_dir / "J95_particles.cs").write_text("")
+    assert find_latest_job_file(job_dir, "particles.cs").name == "J95_004_particles.cs"
+
+
+def test_rank_micrograph_items_sum_allows_mixed_source_kinds():
+    sources = [
+        OverlaySource("J46", Path("/tmp/J46"), "selected", SOURCE_KIND_SELECT2D, "black", parse_rgb_color("black"), {}, None, {}),
+        OverlaySource("J95", Path("/tmp/J95"), None, SOURCE_KIND_REFINE3D, "red", parse_rgb_color("red"), None, None, {}),
+    ]
+    items = [
+        (Path("mic_a.mrc"), [list(range(10)), list(range(3))]),
+        (Path("mic_b.mrc"), [list(range(7)), list(range(8))]),
+    ]
+    ranked = rank_micrograph_items(items, sources, "sum", 2)
+    assert ranked[0][0].name == "mic_b.mrc"
+
+
+def test_quantize_pose3d_zero_step_keeps_pose():
+    pose = (0.12, -0.34, 0.56)
+    quantized = quantize_pose3d(pose, 0.0)
+    assert np.allclose(quantized, pose)

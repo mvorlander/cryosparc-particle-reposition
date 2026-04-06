@@ -10,6 +10,7 @@ import math
 import re
 import struct
 import sys
+import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Iterable
 import numpy as np
 from PIL import Image, ImageColor
 from scipy import ndimage
+from scipy.spatial.transform import Rotation
 
 from . import __version__
 
@@ -34,6 +36,11 @@ DEFAULT_IMBALANCE_WARNING_RATIO = 3.0
 DEFAULT_TOP_MICROGRAPHS_MODE_SINGLE = "sum"
 DEFAULT_TOP_MICROGRAPHS_MODE_MULTI = "balanced"
 DEFAULT_TOP_MICROGRAPHS_MODES = ("sum", "min", "balanced")
+DEFAULT_PROJECTION_ANGLE_STEP_DEG = 5.0
+SELECT2D_JOB_TYPE = "select_2D"
+REFINE3D_JOB_TYPES = ("homo_refine_new", "nonuniform_refine_new", "new_local_refine")
+SOURCE_KIND_SELECT2D = "select2d"
+SOURCE_KIND_REFINE3D = "refine3d"
 
 
 def fail(message: str) -> None:
@@ -104,6 +111,55 @@ def resolve_path(project_dir: Path, value: str) -> Path:
     return project_dir / path
 
 
+def load_job_metadata(job_dir: Path) -> dict:
+    job_json = job_dir / "job.json"
+    if not job_json.exists():
+        fail(f"job.json not found in {job_dir}")
+    with job_json.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def detect_source_kind(job_dir: Path) -> str:
+    job_type = str(load_job_metadata(job_dir).get("type", ""))
+    if job_type == SELECT2D_JOB_TYPE:
+        return SOURCE_KIND_SELECT2D
+    if job_type in REFINE3D_JOB_TYPES:
+        return SOURCE_KIND_REFINE3D
+    fail(
+        f"{job_dir} has unsupported CryoSPARC job type {job_type!r}. "
+        f"Supported types are {SELECT2D_JOB_TYPE!r} and {', '.join(REFINE3D_JOB_TYPES)}."
+    )
+
+
+def source_kind_label(source_kind: str) -> str:
+    if source_kind == SOURCE_KIND_SELECT2D:
+        return "select_2D"
+    if source_kind == SOURCE_KIND_REFINE3D:
+        return "refine3D"
+    return source_kind
+
+
+def find_latest_job_file(job_dir: Path, basename: str) -> Path:
+    iter_pattern = re.compile(rf"^{re.escape(job_dir.name)}_(\d+)_({re.escape(basename)})$")
+    iter_candidates: list[tuple[int, Path]] = []
+    for candidate in job_dir.iterdir():
+        match = iter_pattern.fullmatch(candidate.name)
+        if match:
+            iter_candidates.append((int(match.group(1)), candidate))
+    if iter_candidates:
+        iter_candidates.sort(key=lambda item: item[0])
+        return iter_candidates[-1][1]
+
+    fallbacks = (
+        job_dir / f"{job_dir.name}_{basename}",
+        job_dir / basename,
+    )
+    for candidate in fallbacks:
+        if candidate.exists():
+            return candidate
+    fail(f"Could not find {basename} in {job_dir}")
+
+
 @dataclass(frozen=True)
 class TemplateRecord:
     original_class_idx: int
@@ -114,8 +170,9 @@ class TemplateRecord:
 
 @dataclass(frozen=True)
 class ParticleRecord:
-    class_idx: int
-    pose_rad: float
+    class_idx: int | None
+    pose_rad: float | None
+    pose3d: tuple[float, float, float] | None
     shift_x_px: float
     shift_y_px: float
     align_pixel_size_angstrom: float
@@ -130,11 +187,19 @@ class ParticleRecord:
 class OverlaySource:
     label: str
     job_dir: Path
-    subset: str
+    subset: str | None
+    source_kind: str
     overlay_color_name: str
     overlay_color_rgb: np.ndarray
-    templates: dict[int, TemplateRecord]
+    templates: dict[int, TemplateRecord] | None
+    volume: "VolumeRecord | None"
     particle_groups: dict[Path, list[ParticleRecord]]
+
+
+@dataclass(frozen=True)
+class VolumeRecord:
+    map_path: Path
+    pixel_size_angstrom: float
 
 
 @dataclass(frozen=True)
@@ -200,6 +265,23 @@ class MrcReader:
         )
         return np.array(array, dtype=np.float32, copy=True)
 
+    def read_volume(self, path: Path) -> np.ndarray:
+        header = self.header(path)
+        dtype = self.DTYPE_BY_MODE.get(header.mode)
+        if dtype is None:
+            fail(
+                f"Unsupported MRC mode {header.mode} in {path}; "
+                f"supported modes are {', '.join(str(mode) for mode in sorted(self.DTYPE_BY_MODE))}."
+            )
+        array = np.memmap(
+            path,
+            dtype=dtype,
+            mode="r",
+            offset=header.data_offset,
+            shape=(max(header.nz, 1), header.ny, header.nx),
+        )
+        return np.array(array, dtype=np.float32, copy=True)
+
 
 def load_select2d_files(job_dir: Path, subset: str) -> tuple[Path, Path, Path]:
     particles_path = job_dir / f"particles_{subset}.cs"
@@ -216,21 +298,13 @@ def load_select2d_files(job_dir: Path, subset: str) -> tuple[Path, Path, Path]:
 
 
 def validate_select2d_job(job_dir: Path) -> None:
-    job_json = job_dir / "job.json"
-    if not job_json.exists():
-        fail(f"job.json not found in {job_dir}")
-    with job_json.open("r", encoding="utf-8") as handle:
-        job = json.load(handle)
-    if job.get("type") != "select_2D":
+    job = load_job_metadata(job_dir)
+    if job.get("type") != SELECT2D_JOB_TYPE:
         fail(f"{job_dir} is not a CryoSPARC select_2D job directory.")
 
 
 def validate_denoise_job(job_dir: Path) -> None:
-    job_json = job_dir / "job.json"
-    if not job_json.exists():
-        fail(f"job.json not found in {job_dir}")
-    with job_json.open("r", encoding="utf-8") as handle:
-        job = json.load(handle)
+    job = load_job_metadata(job_dir)
     job_type = str(job.get("type", ""))
     if "denoise" not in job_type:
         fail(f"{job_dir} is not a CryoSPARC denoise job directory.")
@@ -318,7 +392,38 @@ def load_templates(project_dir: Path, templates_path: Path) -> dict[int, Templat
     return templates
 
 
-def load_particles(
+def load_refine_files(job_dir: Path) -> tuple[Path, Path, Path]:
+    particles_path = find_latest_job_file(job_dir, "particles.cs")
+    passthrough_path = job_dir / f"{job_dir.name}_passthrough_particles.cs"
+    volume_path = find_latest_job_file(job_dir, "volume_map.cs")
+    missing = [str(path) for path in (particles_path, passthrough_path, volume_path) if not path.exists()]
+    if missing:
+        fail(
+            "3D refinement job is missing expected files: "
+            + ", ".join(missing)
+        )
+    return particles_path, passthrough_path, volume_path
+
+
+def load_refinement_volume(project_dir: Path, volume_cs_path: Path) -> VolumeRecord:
+    Dataset = load_dataset_class()
+    dataset = Dataset.load(str(volume_cs_path))
+    required = {"map/path", "map/psize_A"}
+    missing = sorted(required - set(dataset.fields()))
+    if missing:
+        fail(
+            f"Refinement volume dataset {volume_cs_path} is missing required fields: "
+            + ", ".join(missing)
+        )
+    if len(dataset) != 1:
+        fail(f"Expected exactly one volume row in {volume_cs_path}, found {len(dataset)}")
+    return VolumeRecord(
+        map_path=resolve_path(project_dir, as_text(dataset["map/path"][0])),
+        pixel_size_angstrom=float(np.asarray(dataset["map/psize_A"], dtype=np.float32)[0]),
+    )
+
+
+def load_select2d_particles(
     project_dir: Path,
     particles_path: Path,
     passthrough_path: Path,
@@ -389,6 +494,7 @@ def load_particles(
             ParticleRecord(
                 class_idx=class_idx,
                 pose_rad=float(pose),
+                pose3d=None,
                 shift_x_px=float(shift[0]),
                 shift_y_px=float(shift[1]),
                 align_pixel_size_angstrom=float(align_psize),
@@ -411,23 +517,118 @@ def load_particles(
     return particle_groups
 
 
+def load_refinement_particles(
+    project_dir: Path,
+    particles_path: Path,
+    passthrough_path: Path,
+) -> dict[Path, list[ParticleRecord]]:
+    Dataset = load_dataset_class()
+    particles = Dataset.load(str(particles_path))
+    passthrough = Dataset.load(str(passthrough_path))
+
+    if len(particles) != len(passthrough):
+        fail("Main and passthrough particle datasets have different row counts.")
+    if not np.array_equal(np.asarray(particles["uid"]), np.asarray(passthrough["uid"])):
+        fail("Main and passthrough particle datasets are not aligned by UID.")
+
+    required_main = {
+        "alignments3D/pose",
+        "alignments3D/shift",
+        "alignments3D/psize_A",
+    }
+    required_pass = {
+        "location/micrograph_path",
+        "location/micrograph_uid",
+        "location/center_x_frac",
+        "location/center_y_frac",
+        "location/micrograph_psize_A",
+    }
+    missing_main = sorted(required_main - set(particles.fields()))
+    missing_pass = sorted(required_pass - set(passthrough.fields()))
+    if missing_main:
+        fail(f"Main particle dataset is missing required fields: {', '.join(missing_main)}")
+    if missing_pass:
+        fail(
+            "Passthrough particle dataset is missing required fields: "
+            + ", ".join(missing_pass)
+        )
+
+    particle_groups: dict[Path, list[ParticleRecord]] = defaultdict(list)
+    poses = np.asarray(particles["alignments3D/pose"], dtype=np.float32)
+    shifts = np.asarray(particles["alignments3D/shift"], dtype=np.float32)
+    align_psizes = np.asarray(particles["alignments3D/psize_A"], dtype=np.float32)
+    micro_uids = np.asarray(passthrough["location/micrograph_uid"], dtype=np.uint64)
+    micro_paths = np.asarray(passthrough["location/micrograph_path"])
+    micro_psizes = np.asarray(passthrough["location/micrograph_psize_A"], dtype=np.float32)
+    center_x_frac = np.asarray(passthrough["location/center_x_frac"], dtype=np.float32)
+    center_y_frac = np.asarray(passthrough["location/center_y_frac"], dtype=np.float32)
+
+    for pose, shift, align_psize, micro_uid, micro_path, micrograph_psize, x_frac, y_frac in zip(
+        poses,
+        shifts,
+        align_psizes,
+        micro_uids,
+        micro_paths,
+        micro_psizes,
+        center_x_frac,
+        center_y_frac,
+        strict=True,
+    ):
+        particle_groups[resolve_path(project_dir, as_text(micro_path))].append(
+            ParticleRecord(
+                class_idx=None,
+                pose_rad=None,
+                pose3d=(float(pose[0]), float(pose[1]), float(pose[2])),
+                shift_x_px=float(shift[0]),
+                shift_y_px=float(shift[1]),
+                align_pixel_size_angstrom=float(align_psize),
+                micrograph_uid=int(micro_uid),
+                raw_micrograph_path=resolve_path(project_dir, as_text(micro_path)),
+                center_x_frac=float(x_frac),
+                center_y_frac=float(y_frac),
+                raw_micrograph_pixel_size_angstrom=float(micrograph_psize),
+            )
+        )
+
+    if not particle_groups:
+        fail("No particles were loaded from the refinement particle dataset.")
+    return particle_groups
+
+
 def load_overlay_source(job_dir: Path, subset: str, overlay_color_name: str) -> OverlaySource:
-    validate_select2d_job(job_dir)
+    source_kind = detect_source_kind(job_dir)
     project_dir = job_dir.parent
-    particles_path, passthrough_path, templates_path = load_select2d_files(job_dir, subset)
-    log(
-        f"Loading particle data for {job_dir.name} from "
-        f"{particles_path.name} and {passthrough_path.name}"
-    )
-    templates = load_templates(project_dir, templates_path)
-    particle_groups = load_particles(project_dir, particles_path, passthrough_path, templates)
+    templates = None
+    volume = None
+    if source_kind == SOURCE_KIND_SELECT2D:
+        validate_select2d_job(job_dir)
+        particles_path, passthrough_path, templates_path = load_select2d_files(job_dir, subset)
+        log(
+            f"Loading 2D particle data for {job_dir.name} from "
+            f"{particles_path.name} and {passthrough_path.name}"
+        )
+        templates = load_templates(project_dir, templates_path)
+        particle_groups = load_select2d_particles(project_dir, particles_path, passthrough_path, templates)
+        source_subset: str | None = subset
+    else:
+        particles_path, passthrough_path, volume_cs_path = load_refine_files(job_dir)
+        log(
+            f"Loading 3D refinement particle data for {job_dir.name} from "
+            f"{particles_path.name}, {passthrough_path.name}, and {volume_cs_path.name}"
+        )
+        volume = load_refinement_volume(project_dir, volume_cs_path)
+        particle_groups = load_refinement_particles(project_dir, particles_path, passthrough_path)
+        source_subset = None
+
     return OverlaySource(
         label=job_dir.name,
         job_dir=job_dir,
-        subset=subset,
+        subset=source_subset,
+        source_kind=source_kind,
         overlay_color_name=overlay_color_name,
         overlay_color_rgb=parse_rgb_color(overlay_color_name),
         templates=templates,
+        volume=volume,
         particle_groups=particle_groups,
     )
 
@@ -445,7 +646,7 @@ def combine_particle_groups(
                 combined[micrograph_path] = slots
             slots[source_index] = particles
     if not combined:
-        fail("No particles were loaded from any requested Select 2D job.")
+        fail("No particles were loaded from any requested overlay source.")
     return combined
 
 
@@ -533,7 +734,7 @@ def rank_micrograph_items(
         ]
         if not overlap_items:
             fail(
-                "No micrographs contain particles from all requested Select 2D jobs "
+                "No micrographs contain particles from all requested overlay sources "
                 f"after filtering, so --top-micrographs-mode {ranking_mode!r} cannot be used."
             )
         if len(overlap_items) < top_micrographs:
@@ -675,7 +876,7 @@ def circular_mask(shape: tuple[int, int], radius_fraction: float) -> np.ndarray:
     return ((yy - center_y) ** 2 + (xx - center_x) ** 2) <= radius**2
 
 
-def make_stamp(
+def make_select2d_stamp(
     class_image: np.ndarray,
     pose_rad: float,
     shift_x_px: float,
@@ -708,6 +909,82 @@ def make_stamp(
     )
 
     scale_factor = template_pixel_size_angstrom / target_pixel_size_angstrom
+    if not math.isclose(scale_factor, 1.0, rel_tol=1e-6, abs_tol=1e-6):
+        stamp = ndimage.zoom(stamp, zoom=scale_factor, order=1)
+    return stamp.astype(np.float32, copy=False)
+
+
+def resample_volume_to_pixel_size(
+    volume: np.ndarray,
+    source_pixel_size_angstrom: float,
+    target_pixel_size_angstrom: float,
+) -> np.ndarray:
+    scale_factor = source_pixel_size_angstrom / target_pixel_size_angstrom
+    if math.isclose(scale_factor, 1.0, rel_tol=1e-6, abs_tol=1e-6):
+        return volume.astype(np.float32, copy=False)
+    return ndimage.zoom(volume, zoom=scale_factor, order=1).astype(np.float32, copy=False)
+
+
+def project_volume(
+    volume: np.ndarray,
+    pose3d: tuple[float, float, float],
+    pose_sign: int,
+) -> np.ndarray:
+    fill_value = float(volume.mean())
+    rotvec_xyz = pose_sign * np.asarray(pose3d, dtype=np.float32)
+    rotation_xyz = Rotation.from_rotvec(rotvec_xyz)
+    matrix_xyz = rotation_xyz.inv().as_matrix()
+    matrix_zyx = matrix_xyz[::-1, ::-1]
+    center = (np.asarray(volume.shape, dtype=np.float32) - 1.0) / 2.0
+    offset = center - matrix_zyx @ center
+    rotated = ndimage.affine_transform(
+        volume,
+        matrix_zyx,
+        offset=offset,
+        order=1,
+        mode="constant",
+        cval=fill_value,
+    )
+    return rotated.sum(axis=0).astype(np.float32, copy=False)
+
+
+def quantize_pose3d(
+    pose3d: tuple[float, float, float],
+    angle_step_deg: float,
+) -> tuple[float, float, float]:
+    pose_vec = np.asarray(pose3d, dtype=np.float32)
+    if angle_step_deg <= 0.0:
+        return tuple(float(value) for value in pose_vec)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        euler_deg = Rotation.from_rotvec(pose_vec).as_euler("ZYZ", degrees=True)
+    quantized_euler_deg = np.round(euler_deg / angle_step_deg) * angle_step_deg
+    quantized_pose = Rotation.from_euler("ZYZ", quantized_euler_deg, degrees=True).as_rotvec()
+    return tuple(float(value) for value in quantized_pose)
+
+
+def make_refine3d_stamp_from_projection(
+    projection: np.ndarray,
+    shift_x_px: float,
+    shift_y_px: float,
+    shift_sign: int,
+    volume_pixel_size_angstrom: float,
+    shift_pixel_size_angstrom: float,
+    target_pixel_size_angstrom: float,
+) -> np.ndarray:
+    fill_value = float(projection.mean())
+    shift_scale = shift_pixel_size_angstrom / volume_pixel_size_angstrom
+    stamp = ndimage.shift(
+        projection,
+        shift=(
+            shift_sign * shift_y_px * shift_scale,
+            shift_sign * shift_x_px * shift_scale,
+        ),
+        order=1,
+        mode="constant",
+        cval=fill_value,
+    )
+    scale_factor = volume_pixel_size_angstrom / target_pixel_size_angstrom
     if not math.isclose(scale_factor, 1.0, rel_tol=1e-6, abs_tol=1e-6):
         stamp = ndimage.zoom(stamp, zoom=scale_factor, order=1)
     return stamp.astype(np.float32, copy=False)
@@ -880,11 +1157,35 @@ def save_blink_gif(
     )
 
 
+def format_source_summary(source: OverlaySource) -> str:
+    if source.source_kind == SOURCE_KIND_SELECT2D:
+        return f"{source.label}({source_kind_label(source.source_kind)}, {source.subset}, {source.overlay_color_name})"
+    return f"{source.label}({source_kind_label(source.source_kind)}, {source.overlay_color_name})"
+
+
+def default_output_name(
+    sources: list[OverlaySource],
+    primary_subset: str,
+    denoise_job_dir: Path | None,
+    job_dir_2: Path | None,
+) -> str:
+    if all(source.source_kind == SOURCE_KIND_SELECT2D for source in sources):
+        output_name = f"{primary_subset}_2d_class_overlay"
+    else:
+        output_name = "particle_reprojection_overlay"
+    if job_dir_2 is not None:
+        output_name += f"_{job_dir_2.name}"
+    if denoise_job_dir is not None:
+        output_name += f"_{denoise_job_dir.name}"
+    return output_name
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Take one or two CryoSPARC select_2D jobs and place the chosen 2D class averages "
-            "back onto the source micrographs using each particle's stored 2D pose and shift."
+            "Take one or two CryoSPARC overlay sources and place their per-particle signal "
+            "back onto the source micrographs. Supported sources are select_2D jobs "
+            "(2D class averages) and 3D refinement jobs (per-particle map projections)."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -898,13 +1199,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
     required.add_argument(
         "--job-dir",
         required=True,
-        help="Path to a CryoSPARC select_2D job directory, for example /path/to/J119",
+        help=(
+            "Path to a CryoSPARC select_2D or 3D refinement job directory, "
+            "for example /path/to/J119 or /path/to/J95"
+        ),
     )
     required.add_argument(
         "--job-dir-2",
         help=(
-            "Optional second CryoSPARC select_2D job directory. When set, both jobs are "
-            "projected back into the same target micrographs at once."
+            "Optional second CryoSPARC select_2D or 3D refinement job directory. "
+            "When set, both sources are projected back into the same target micrographs at once."
         ),
     )
 
@@ -913,7 +1217,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--subset",
         choices=("selected", "excluded"),
         default="selected",
-        help="Use particles_selected/templates_selected or the excluded counterparts (default: selected)",
+        help=(
+            "Subset for select_2D jobs only: use particles_selected/templates_selected "
+            "or the excluded counterparts (default: selected)"
+        ),
     )
     main.add_argument(
         "--subset-2",
@@ -930,15 +1237,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
     main.add_argument(
         "--output-dir",
         help=(
-            "Output directory (default: <job-dir>/<subset>_2d_class_overlay, with "
-            "optional _<job-dir-2> and _<denoise-job> suffixes when those inputs are used)"
+            "Output directory (default: keep the historical <subset>_2d_class_overlay name "
+            "for pure Select 2D runs, otherwise use particle_reprojection_overlay; optional "
+            "_<job-dir-2> and _<denoise-job> suffixes are appended when those inputs are used)"
         ),
     )
     main.add_argument(
         "--overlay-color",
         default=DEFAULT_OVERLAY_COLOR,
         help=(
-            "Overlay color for the primary Select 2D job. "
+            "Overlay color for the primary overlay source. "
             f"Default: {DEFAULT_OVERLAY_COLOR}"
         ),
     )
@@ -973,7 +1281,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_CLASS_OPACITY,
         help=(
-            "Relative opacity weight of the overlaid 2D class averages in the composite "
+            "Relative opacity weight of the overlaid particle signal in the composite "
             f"(default: {DEFAULT_CLASS_OPACITY})"
         ),
     )
@@ -1073,8 +1381,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
         choices=(-1, 1),
         default=DEFAULT_POSE_SIGN,
         help=(
-            "Sign applied to alignments2D/pose before rotation. "
-            f"Measured default for CryoSPARC select_2D is {DEFAULT_POSE_SIGN}."
+            "Sign applied to alignment poses before rotation. "
+            "For 2D sources this affects alignments2D/pose; for 3D sources it affects "
+            f"the 3-vector alignments3D/pose rotation. Default: {DEFAULT_POSE_SIGN}."
         ),
     )
     advanced.add_argument(
@@ -1083,8 +1392,19 @@ def build_argument_parser() -> argparse.ArgumentParser:
         choices=(-1, 1),
         default=DEFAULT_SHIFT_SIGN,
         help=(
-            "Sign applied to alignments2D/shift before stamping. "
-            f"Measured default for CryoSPARC select_2D is {DEFAULT_SHIFT_SIGN}."
+            "Sign applied to alignment shifts before stamping. "
+            "For 2D sources this affects alignments2D/shift; for 3D sources it affects "
+            f"alignments3D/shift. Default: {DEFAULT_SHIFT_SIGN}."
+        ),
+    )
+    advanced.add_argument(
+        "--projection-angle-step-deg",
+        type=float,
+        default=DEFAULT_PROJECTION_ANGLE_STEP_DEG,
+        help=(
+            "For 3D refinement sources, quantize particle orientations into Euler-angle bins "
+            "of this size and reuse the cached backprojection for each bin. Use 0 to disable "
+            f"quantization and project every particle exactly. Default: {DEFAULT_PROJECTION_ANGLE_STEP_DEG}"
         ),
     )
     advanced.add_argument(
@@ -1110,6 +1430,19 @@ def build_argument_parser() -> argparse.ArgumentParser:
     cryosparc-2d-class-overlay \
       --job-dir /path/to/J46 \
       --job-dir-2 /path/to/J52 \
+      --overlay-color black \
+      --overlay-color-2 red
+
+  Render per-particle 3D map backprojections from a refinement job:
+    cryosparc-2d-class-overlay \
+      --job-dir /path/to/J95 \
+      --projection-angle-step-deg 5 \
+      --top-micrographs 1
+
+  Combine a Select 2D source with a 3D refinement source:
+    cryosparc-2d-class-overlay \
+      --job-dir /path/to/J46 \
+      --job-dir-2 /path/to/J95 \
       --overlay-color black \
       --overlay-color-2 red
 
@@ -1177,18 +1510,6 @@ def main() -> None:
         validate_denoise_job(denoise_job_dir)
 
     subset_2 = args.subset_2 or args.subset
-    output_name = f"{args.subset}_2d_class_overlay"
-    if job_dir_2 is not None:
-        output_name += f"_{job_dir_2.name}"
-    if denoise_job_dir is not None:
-        output_name += f"_{denoise_job_dir.name}"
-    output_dir = (
-        Path(args.output_dir).expanduser().resolve()
-        if args.output_dir
-        else job_dir / output_name
-    )
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     if args.downsample is not None:
         if args.downsample < 1:
             fail("--downsample must be at least 1")
@@ -1214,6 +1535,8 @@ def main() -> None:
         fail("Use either --max-micrographs or --top-micrographs, not both.")
     if args.imbalance_warning_ratio <= 1.0:
         fail("--imbalance-warning-ratio must be greater than 1")
+    if args.projection_angle_step_deg < 0.0:
+        fail("--projection-angle-step-deg must be greater than or equal to 0")
     if not (0.0 < args.mask_radius_fraction <= 0.5):
         fail("--mask-radius-fraction must be in the range (0, 0.5]")
 
@@ -1222,6 +1545,13 @@ def main() -> None:
     ]
     if job_dir_2 is not None:
         sources.append(load_overlay_source(job_dir_2, subset_2, args.overlay_color_2))
+    output_name = default_output_name(sources, args.subset, denoise_job_dir, job_dir_2)
+    output_dir = (
+        Path(args.output_dir).expanduser().resolve()
+        if args.output_dir
+        else job_dir / output_name
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
     top_micrographs_mode = args.top_micrographs_mode or (
         DEFAULT_TOP_MICROGRAPHS_MODE_MULTI
         if len(sources) > 1
@@ -1245,8 +1575,7 @@ def main() -> None:
         args.imbalance_warning_ratio,
     )
     source_summary = ", ".join(
-        f"{source.label}({source.subset}, {source.overlay_color_name})"
-        for source in sources
+        format_source_summary(source) for source in sources
     )
     log(
         f"Rendering {len(selected_micrographs)} micrographs from {source_summary} "
@@ -1256,9 +1585,20 @@ def main() -> None:
         log(f"Top-micrograph ranking mode: {top_micrographs_mode}")
     if denoise_job_dir is not None:
         log(f"Rendering onto denoised targets from {denoise_job_dir.name}")
+    if any(source.source_kind == SOURCE_KIND_REFINE3D for source in sources):
+        if args.projection_angle_step_deg > 0.0:
+            log(
+                "Quantizing 3D refinement orientations for projection caching at "
+                f"{args.projection_angle_step_deg:.2f} degree bins"
+            )
+        else:
+            log("3D refinement projection caching is disabled; using exact per-particle orientations")
 
     mrc_reader = MrcReader()
     template_cache: dict[tuple[Path, int], np.ndarray] = {}
+    volume_cache: dict[Path, np.ndarray] = {}
+    resampled_volume_cache: dict[tuple[Path, float], np.ndarray] = {}
+    projection_cache: dict[tuple[Path, float, tuple[float, float, float]], np.ndarray] = {}
     summary_rows: list[dict[str, str | int | float]] = []
     per_source_count_fields = [
         f"particle_count_{normalize_field_label(source.label)}"
@@ -1280,26 +1620,71 @@ def main() -> None:
             if particles:
                 source = sources[source_index]
                 for particle in particles:
-                    template = source.templates[particle.class_idx]
-                    template_key = (template.selected_stack_path, template.selected_stack_idx)
-                    class_image = template_cache.get(template_key)
-                    if class_image is None:
-                        class_image = mrc_reader.read_slice(
-                            template.selected_stack_path, template.selected_stack_idx
-                        )
-                        template_cache[template_key] = class_image
+                    if source.source_kind == SOURCE_KIND_SELECT2D:
+                        if source.templates is None or particle.class_idx is None or particle.pose_rad is None:
+                            fail("Encountered an internal error: Select 2D particle is missing template data.")
+                        template = source.templates[particle.class_idx]
+                        template_key = (template.selected_stack_path, template.selected_stack_idx)
+                        class_image = template_cache.get(template_key)
+                        if class_image is None:
+                            class_image = mrc_reader.read_slice(
+                                template.selected_stack_path, template.selected_stack_idx
+                            )
+                            template_cache[template_key] = class_image
 
-                    stamp = make_stamp(
-                        class_image=class_image,
-                        pose_rad=particle.pose_rad,
-                        shift_x_px=particle.shift_x_px,
-                        shift_y_px=particle.shift_y_px,
-                        pose_sign=args.pose_sign,
-                        shift_sign=args.shift_sign,
-                        template_pixel_size_angstrom=template.pixel_size_angstrom,
-                        shift_pixel_size_angstrom=particle.align_pixel_size_angstrom,
-                        target_pixel_size_angstrom=target.pixel_size_angstrom,
-                    )
+                        stamp = make_select2d_stamp(
+                            class_image=class_image,
+                            pose_rad=particle.pose_rad,
+                            shift_x_px=particle.shift_x_px,
+                            shift_y_px=particle.shift_y_px,
+                            pose_sign=args.pose_sign,
+                            shift_sign=args.shift_sign,
+                            template_pixel_size_angstrom=template.pixel_size_angstrom,
+                            shift_pixel_size_angstrom=particle.align_pixel_size_angstrom,
+                            target_pixel_size_angstrom=target.pixel_size_angstrom,
+                        )
+                    else:
+                        if source.volume is None or particle.pose3d is None:
+                            fail("Encountered an internal error: 3D refinement particle is missing volume data.")
+                        raw_volume = volume_cache.get(source.volume.map_path)
+                        if raw_volume is None:
+                            raw_volume = mrc_reader.read_volume(source.volume.map_path)
+                            volume_cache[source.volume.map_path] = raw_volume
+                        resampled_key = (source.volume.map_path, round(target.pixel_size_angstrom, 6))
+                        projection_volume = resampled_volume_cache.get(resampled_key)
+                        if projection_volume is None:
+                            projection_volume = resample_volume_to_pixel_size(
+                                raw_volume,
+                                source_pixel_size_angstrom=source.volume.pixel_size_angstrom,
+                                target_pixel_size_angstrom=target.pixel_size_angstrom,
+                            )
+                            resampled_volume_cache[resampled_key] = projection_volume
+                        quantized_pose3d = quantize_pose3d(
+                            particle.pose3d,
+                            args.projection_angle_step_deg,
+                        )
+                        projection_key = (
+                            source.volume.map_path,
+                            round(target.pixel_size_angstrom, 6),
+                            tuple(round(value, 6) for value in quantized_pose3d),
+                        )
+                        projection = projection_cache.get(projection_key)
+                        if projection is None:
+                            projection = project_volume(
+                                volume=projection_volume,
+                                pose3d=quantized_pose3d,
+                                pose_sign=args.pose_sign,
+                            )
+                            projection_cache[projection_key] = projection
+                        stamp = make_refine3d_stamp_from_projection(
+                            projection=projection,
+                            shift_x_px=particle.shift_x_px,
+                            shift_y_px=particle.shift_y_px,
+                            shift_sign=args.shift_sign,
+                            volume_pixel_size_angstrom=target.pixel_size_angstrom,
+                            shift_pixel_size_angstrom=particle.align_pixel_size_angstrom,
+                            target_pixel_size_angstrom=target.pixel_size_angstrom,
+                        )
                     paste_stamp(
                         overlay_sum=overlay_sum,
                         overlay_weight=overlay_weight,
