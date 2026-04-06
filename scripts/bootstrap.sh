@@ -102,7 +102,7 @@ Bootstrap complete.
 
 Next steps:
   source "${VENV_DIR}/bin/activate"
-  cryosparc-2d-class-overlay --help
+  cryosparc-particle-reposition --help
 
 Installed cryosparc-tools spec:
   ${TOOLS_SPEC}

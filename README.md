@@ -1,6 +1,6 @@
-# cryosparc-2d-class-overlay
+# cryosparc-particle-reposition
 
-`cryosparc-2d-class-overlay` is a local-first command-line tool that takes one or more CryoSPARC overlay sources and projects their per-particle signal back onto the original micrographs or onto denoised micrographs.
+`cryosparc-particle-reposition` is a local-first command-line tool that takes one or more CryoSPARC overlay sources and projects their per-particle signal back onto the original micrographs or onto denoised micrographs.
 
 Supported source types:
 
@@ -24,6 +24,10 @@ GIF generated from two `select_2D` jobs overlaid onto a denoised micrograph, one
 
 ![Example blink overlay](docs/media/j46_j98_j10_denoised_overlay_example.blink.gif)
 
+GIF generated from two particle-subset-derived reconstruct-only jobs overlaid onto a denoised micrograph. Black and red correspond to different particle scale-factor subsets.
+
+![Particle subset scale-factor example](docs/media/j100_j101_particle_subset_scale_factor_example.blink.gif)
+
 ## Acknowledgements and Prior Work
 
 This repository is a new, independent implementation of the ReconSil concept for CryoSPARC overlay sources.
@@ -41,6 +45,8 @@ The particle re-projection step in this repository was also informed by the gene
 - RELION source: https://github.com/3dem/relion/blob/master/src/apps/particle_reposition.cpp
 
 This repository does not contain the original ReconSil source code. It should be understood as a fresh implementation of the same general idea, adapted for CryoSPARC `.cs` datasets, local Python environments, and direct command-line use.
+
+The preferred CLI name is `cryosparc-particle-reposition`. The older `cryosparc-2d-class-overlay` command remains available as a legacy alias.
 
 ## Features
 
@@ -85,7 +91,7 @@ git clone https://github.com/mvorlander/cryosparc-2d-class-overlay.git
 cd cryosparc-2d-class-overlay
 ./scripts/bootstrap.sh --cryosparc-version 5.0
 source .venv/bin/activate
-cryosparc-2d-class-overlay --help
+cryosparc-particle-reposition --help
 ```
 
 For a CryoSPARC `4.7.x` installation:
@@ -111,14 +117,14 @@ Replace `5.0.0` with the minor release that matches your CryoSPARC installation.
 ### Single Select 2D job
 
 ```bash
-cryosparc-2d-class-overlay \
+cryosparc-particle-reposition \
   --job-dir /path/to/CS-project/J119
 ```
 
 ### Multiple Select 2D jobs overlaid into the same micrographs
 
 ```bash
-cryosparc-2d-class-overlay \
+cryosparc-particle-reposition \
   --job-dir /path/to/CS-project/J46 \
   --job-dir /path/to/CS-project/J98 \
   --overlay-color black \
@@ -128,14 +134,14 @@ cryosparc-2d-class-overlay \
 ### Single 3D refinement job
 
 ```bash
-cryosparc-2d-class-overlay \
+cryosparc-particle-reposition \
   --job-dir /path/to/CS-project/J95
 ```
 
 ### 3D refinement job onto denoised micrographs
 
 ```bash
-cryosparc-2d-class-overlay \
+cryosparc-particle-reposition \
   --job-dir /path/to/CS-project/J95 \
   --denoise-job-dir /path/to/CS-project/J10 \
   --projection-angle-step-deg 5
@@ -144,7 +150,7 @@ cryosparc-2d-class-overlay \
 ### Render onto denoised micrographs
 
 ```bash
-cryosparc-2d-class-overlay \
+cryosparc-particle-reposition \
   --job-dir /path/to/CS-project/J46 \
   --denoise-job-dir /path/to/CS-project/J10
 ```
@@ -152,7 +158,7 @@ cryosparc-2d-class-overlay \
 ### Rank by the most balanced overlap across several jobs
 
 ```bash
-cryosparc-2d-class-overlay \
+cryosparc-particle-reposition \
   --job-dir /path/to/CS-project/J46 \
   --job-dir /path/to/CS-project/J98 \
   --job-dir /path/to/CS-project/J95 \
@@ -163,7 +169,7 @@ cryosparc-2d-class-overlay \
 ### Mix 2D and 3D sources in one render
 
 ```bash
-cryosparc-2d-class-overlay \
+cryosparc-particle-reposition \
   --job-dir /path/to/CS-project/J46 \
   --job-dir /path/to/CS-project/J98 \
   --job-dir /path/to/CS-project/J95 \
@@ -175,7 +181,7 @@ cryosparc-2d-class-overlay \
 ### Disable GIF output
 
 ```bash
-cryosparc-2d-class-overlay \
+cryosparc-particle-reposition \
   --job-dir /path/to/CS-project/J46 \
   --no-write-gifs
 ```

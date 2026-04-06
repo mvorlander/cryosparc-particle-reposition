@@ -24,6 +24,7 @@ from scipy.spatial.transform import Rotation
 from . import __version__
 
 
+CLI_NAME = "cryosparc-particle-reposition"
 DEFAULT_OVERLAY_COLOR = "black"
 DEFAULT_SECONDARY_OVERLAY_COLOR = "red"
 DEFAULT_OVERLAY_COLOR_CYCLE = (
@@ -69,7 +70,7 @@ def fail(message: str) -> None:
 
 
 def log(message: str) -> None:
-    print(f"[cryosparc-2d-class-overlay] {message}")
+    print(f"[{CLI_NAME}] {message}")
 
 
 def as_text(value) -> str:
@@ -1589,37 +1590,37 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    parser.epilog = """Examples:
+    parser.epilog = f"""Examples:
   Render all selected micrographs from a Select 2D job:
-    cryosparc-2d-class-overlay --job-dir /path/to/J119
+    {CLI_NAME} --job-dir /path/to/J119
 
   Render onto denoised micrographs from J10:
-    cryosparc-2d-class-overlay \
+    {CLI_NAME} \
       --job-dir /path/to/J46 \
       --denoise-job-dir /path/to/J10
 
   Overlay two Select 2D jobs into the same micrographs:
-    cryosparc-2d-class-overlay \
+    {CLI_NAME} \
       --job-dir /path/to/J46 \
       --job-dir /path/to/J52 \
       --overlay-color black \
       --overlay-color red
 
   Render per-particle 3D map backprojections from a refinement job:
-    cryosparc-2d-class-overlay \
+    {CLI_NAME} \
       --job-dir /path/to/J95 \
       --projection-angle-step-deg 5 \
       --top-micrographs 1
 
   Combine a Select 2D source with a 3D refinement source:
-    cryosparc-2d-class-overlay \
+    {CLI_NAME} \
       --job-dir /path/to/J46 \
       --job-dir /path/to/J95 \
       --overlay-color black \
       --overlay-color red
 
   Overlay three sources with explicit per-job colors:
-    cryosparc-2d-class-overlay \
+    {CLI_NAME} \
       --job-dir /path/to/J46 \
       --job-dir /path/to/J98 \
       --job-dir /path/to/J95 \
@@ -1628,12 +1629,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
       --overlay-color cyan
 
   Force a white background for the synthetic PNGs:
-    cryosparc-2d-class-overlay \
+    {CLI_NAME} \
       --job-dir /path/to/J46 \
       --synthetic-background-color white
 
   Prioritize micrographs that keep all jobs well represented:
-    cryosparc-2d-class-overlay \
+    {CLI_NAME} \
       --job-dir /path/to/J46 \
       --job-dir /path/to/J52 \
       --job-dir /path/to/J95 \
@@ -1641,31 +1642,31 @@ def build_argument_parser() -> argparse.ArgumentParser:
       --top-micrographs-mode balanced
 
   Render black overlays with a stronger class contribution:
-    cryosparc-2d-class-overlay \
+    {CLI_NAME} \
       --job-dir /path/to/J119 \
       --overlay-color black \
       --micrograph-opacity 0.8 \
       --class-opacity 1.2
 
   Test only three micrographs and downsample the PNGs:
-    cryosparc-2d-class-overlay \\
+    {CLI_NAME} \\
       --job-dir /path/to/J119 \\
       --micrographs mic1_patch_aligned_doseweighted,mic2_patch_aligned_doseweighted,mic3 \\
       --png-downsample 2
 
   Write lower-resolution blink GIFs while keeping full-resolution PNGs:
-    cryosparc-2d-class-overlay \
+    {CLI_NAME} \
       --job-dir /path/to/J119 \
       --png-downsample 1 \
       --gif-downsample 4
 
   Disable GIF output entirely:
-    cryosparc-2d-class-overlay \
+    {CLI_NAME} \
       --job-dir /path/to/J119 \
       --no-write-gifs
 
   Render only the ten most populated micrographs:
-    cryosparc-2d-class-overlay \\
+    {CLI_NAME} \\
       --job-dir /path/to/J119 \\
       --top-micrographs 10
 """

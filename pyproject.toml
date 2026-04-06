@@ -3,9 +3,9 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cryosparc-2d-class-overlay"
+name = "cryosparc-particle-reposition"
 version = "0.1.0"
-description = "Overlay CryoSPARC Select 2D class averages back onto micrographs."
+description = "Reposition CryoSPARC 2D and 3D particle signals back onto micrographs."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -38,6 +38,7 @@ dev = [
 ]
 
 [project.scripts]
+cryosparc-particle-reposition = "cryosparc_2d_class_overlay.cli:main"
 cryosparc-2d-class-overlay = "cryosparc_2d_class_overlay.cli:main"
 cryosparc-overlay-2d-classes-on-micrographs = "cryosparc_2d_class_overlay.cli:main"
 
