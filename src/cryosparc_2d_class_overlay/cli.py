@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Iterable
 
 import numpy as np
-from PIL import Image, ImageColor
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 from scipy import ndimage
 from scipy.spatial.transform import Rotation
 
@@ -1117,6 +1117,77 @@ def downsample_image(array: np.ndarray, factor: int, order: int = 1) -> np.ndarr
     return ndimage.zoom(array, zoom=1.0 / factor, order=order)
 
 
+def load_legend_font(height: int, width: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
+    font_size = max(12, int(round(min(height, width) * 0.022)))
+    for font_name in ("DejaVuSans.ttf", "Arial.ttf"):
+        try:
+            return ImageFont.truetype(font_name, font_size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def annotate_overlay_legend(
+    rgb: np.ndarray,
+    legend_entries: list[tuple[str, np.ndarray]],
+) -> np.ndarray:
+    if len(legend_entries) < 2:
+        return rgb
+
+    image = Image.fromarray(rgb, mode="RGB")
+    draw = ImageDraw.Draw(image)
+    font = load_legend_font(image.height, image.width)
+
+    margin = max(8, int(round(min(image.height, image.width) * 0.015)))
+    padding = max(6, int(round(margin * 0.6)))
+    swatch_size = max(10, int(round(min(image.height, image.width) * 0.018)))
+    line_gap = max(4, int(round(padding * 0.5)))
+
+    text_boxes = [
+        draw.textbbox((0, 0), label, font=font)
+        for label, _ in legend_entries
+    ]
+    text_width = max(box[2] - box[0] for box in text_boxes)
+    text_height = max(box[3] - box[1] for box in text_boxes)
+    row_height = max(swatch_size, text_height)
+    panel_width = padding * 3 + swatch_size + text_width
+    panel_height = padding * 2 + len(legend_entries) * row_height + (len(legend_entries) - 1) * line_gap
+
+    x0 = margin
+    y0 = margin
+    x1 = x0 + panel_width
+    y1 = y0 + panel_height
+    draw.rounded_rectangle(
+        (x0, y0, x1, y1),
+        radius=max(4, padding),
+        fill=(245, 245, 245),
+        outline=(0, 0, 0),
+        width=max(1, padding // 3),
+    )
+
+    for index, (label, color_rgb) in enumerate(legend_entries):
+        row_y = y0 + padding + index * (row_height + line_gap)
+        swatch_y = row_y + max(0, (row_height - swatch_size) // 2)
+        swatch_x0 = x0 + padding
+        swatch_x1 = swatch_x0 + swatch_size
+        swatch_y1 = swatch_y + swatch_size
+        swatch_color = tuple(
+            int(round(float(channel) * 255.0))
+            for channel in color_rgb
+        )
+        draw.rectangle(
+            (swatch_x0, swatch_y, swatch_x1, swatch_y1),
+            fill=swatch_color,
+            outline=(0, 0, 0),
+            width=max(1, padding // 4),
+        )
+        text_x = swatch_x1 + padding
+        text_y = row_y + max(0, (row_height - text_height) // 2)
+        draw.text((text_x, text_y), label, fill=(0, 0, 0), font=font)
+
+    return np.asarray(image, dtype=np.uint8)
+
+
 def render_overlay(
     micrograph: np.ndarray,
     overlay_avgs: list[np.ndarray],
@@ -1723,6 +1794,10 @@ def main() -> None:
         f"particle_count_{normalize_field_label(source.label)}"
         for source in sources
     ]
+    legend_entries = [
+        (source.job_dir.name, source.overlay_color_rgb)
+        for source in sources
+    ]
 
     for index, (micrograph_path, particle_lists) in enumerate(selected_micrographs, start=1):
         target = get_target_record(particle_lists, denoised_targets)
@@ -1831,6 +1906,7 @@ def main() -> None:
             class_opacity=args.class_opacity,
             downsample=args.png_downsample,
         )
+        overlay_png = annotate_overlay_legend(overlay_png, legend_entries)
         gif_base = gif_overlay = None
         if args.write_gifs:
             gif_base, gif_overlay, _, _ = render_overlay(
@@ -1843,6 +1919,8 @@ def main() -> None:
                 class_opacity=args.class_opacity,
                 downsample=args.gif_downsample,
             )
+            gif_base = annotate_overlay_legend(gif_base, legend_entries)
+            gif_overlay = annotate_overlay_legend(gif_overlay, legend_entries)
 
         stem = target.path.stem
         overlay_path = output_dir / f"{stem}.overlay.png"

@@ -6,6 +6,7 @@ from cryosparc_2d_class_overlay.cli import (
     OverlaySource,
     SOURCE_KIND_REFINE3D,
     SOURCE_KIND_SELECT2D,
+    annotate_overlay_legend,
     default_overlay_colors,
     find_latest_job_file,
     harmonic_mean,
@@ -54,6 +55,19 @@ def test_normalize_source_subsets_repeats_single_value():
 def test_normalize_source_colors_overrides_first_two_then_fills_defaults():
     colors = normalize_source_colors(4, ["white"], "lime")
     assert colors == ["white", "lime", "cyan", "yellow"]
+
+
+def test_annotate_overlay_legend_changes_image_for_multiple_sources():
+    rgb = np.zeros((80, 80, 3), dtype=np.uint8)
+    annotated = annotate_overlay_legend(
+        rgb,
+        [
+            ("J46", parse_rgb_color("black")),
+            ("J98", parse_rgb_color("red")),
+        ],
+    )
+    assert annotated.shape == rgb.shape
+    assert np.any(annotated != rgb)
 
 
 def test_rank_micrograph_items_balanced_prefers_shared_signal():

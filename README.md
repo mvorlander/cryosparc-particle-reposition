@@ -46,6 +46,7 @@ This repository does not contain the original ReconSil source code. It should be
 
 - Works on CryoSPARC `select_2D` jobs and supported 3D refinement jobs directly from disk
 - Supports one or more overlay sources at the same time
+- Adds an automatic `JXX` color legend to multi-source overlay PNGs and GIFs
 - Supports rendering onto denoised micrographs from a CryoSPARC denoise job
 - Supports per-particle 3D refinement-map backprojections
 - Supports cached 3D backprojections by quantized angular bins for speed
