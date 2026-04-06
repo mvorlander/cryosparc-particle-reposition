@@ -26,6 +26,17 @@ from . import __version__
 
 DEFAULT_OVERLAY_COLOR = "black"
 DEFAULT_SECONDARY_OVERLAY_COLOR = "red"
+DEFAULT_OVERLAY_COLOR_CYCLE = (
+    DEFAULT_OVERLAY_COLOR,
+    DEFAULT_SECONDARY_OVERLAY_COLOR,
+    "cyan",
+    "yellow",
+    "lime",
+    "magenta",
+    "orange",
+    "white",
+    "blue",
+)
 DEFAULT_SYNTHETIC_BACKGROUND_COLOR = "auto"
 DEFAULT_MICROGRAPH_OPACITY = 1.0
 DEFAULT_CLASS_OPACITY = 0.70
@@ -69,6 +80,13 @@ def as_text(value) -> str:
 
 def parse_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def default_overlay_colors(source_count: int) -> list[str]:
+    return [
+        DEFAULT_OVERLAY_COLOR_CYCLE[index % len(DEFAULT_OVERLAY_COLOR_CYCLE)]
+        for index in range(source_count)
+    ]
 
 
 def parse_rgb_color(value: str) -> np.ndarray:
@@ -1196,25 +1214,71 @@ def format_source_summary(source: OverlaySource) -> str:
 
 def default_output_name(
     sources: list[OverlaySource],
-    primary_subset: str,
     denoise_job_dir: Path | None,
-    job_dir_2: Path | None,
 ) -> str:
     if all(source.source_kind == SOURCE_KIND_SELECT2D for source in sources):
-        output_name = f"{primary_subset}_2d_class_overlay"
+        output_name = f"{sources[0].subset or 'selected'}_2d_class_overlay"
     else:
         output_name = "particle_reprojection_overlay"
-    if job_dir_2 is not None:
-        output_name += f"_{job_dir_2.name}"
+    if len(sources) > 1:
+        output_name += "_" + "_".join(source.job_dir.name for source in sources[1:])
     if denoise_job_dir is not None:
         output_name += f"_{denoise_job_dir.name}"
     return output_name
 
 
+def normalize_source_subsets(
+    source_count: int,
+    subset_values: list[str] | None,
+    subset_2: str | None,
+) -> list[str]:
+    values = list(subset_values or [])
+    if not values:
+        values = ["selected"]
+    if subset_2 is not None:
+        if source_count < 2:
+            fail("--subset-2 requires a second overlay source")
+        if len(values) >= 2 and values[1] != subset_2:
+            fail("--subset-2 conflicts with the second repeated --subset value")
+        while len(values) < 2:
+            values.append(values[0])
+        values[1] = subset_2
+    if len(values) == 1:
+        return values * source_count
+    if len(values) != source_count:
+        fail(
+            f"Provide either one --subset value or one per input job "
+            f"({source_count} jobs, {len(values)} subset values)."
+        )
+    return values
+
+
+def normalize_source_colors(
+    source_count: int,
+    color_values: list[str] | None,
+    overlay_color_2: str | None,
+) -> list[str]:
+    colors = default_overlay_colors(source_count)
+    provided = list(color_values or [])
+    if len(provided) > source_count:
+        fail(
+            f"Received {len(provided)} --overlay-color values for {source_count} input jobs."
+        )
+    for index, color in enumerate(provided):
+        colors[index] = color
+    if overlay_color_2 is not None:
+        if source_count < 2:
+            fail("--overlay-color-2 requires a second overlay source")
+        if len(provided) >= 2 and provided[1] != overlay_color_2:
+            fail("--overlay-color-2 conflicts with the second repeated --overlay-color value")
+        colors[1] = overlay_color_2
+    return colors
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Take one or two CryoSPARC overlay sources and place their per-particle signal "
+            "Take one or more CryoSPARC overlay sources and place their per-particle signal "
             "back onto the source micrographs. Supported sources are select_2D jobs "
             "(2D class averages) and 3D refinement jobs (per-particle map projections)."
         ),
@@ -1229,34 +1293,34 @@ def build_argument_parser() -> argparse.ArgumentParser:
     required = parser.add_argument_group("Required")
     required.add_argument(
         "--job-dir",
+        action="append",
         required=True,
         help=(
-            "Path to a CryoSPARC select_2D or 3D refinement job directory, "
-            "for example /path/to/J119 or /path/to/J95"
+            "Path to a CryoSPARC select_2D or 3D refinement job directory. "
+            "Repeat --job-dir once per overlay source, for example "
+            "--job-dir /path/to/J46 --job-dir /path/to/J98 --job-dir /path/to/J95"
         ),
     )
     required.add_argument(
         "--job-dir-2",
-        help=(
-            "Optional second CryoSPARC select_2D or 3D refinement job directory. "
-            "When set, both sources are projected back into the same target micrographs at once."
-        ),
+        help=argparse.SUPPRESS,
     )
 
     main = parser.add_argument_group("Common")
     main.add_argument(
         "--subset",
+        action="append",
         choices=("selected", "excluded"),
-        default="selected",
         help=(
             "Subset for select_2D jobs only: use particles_selected/templates_selected "
-            "or the excluded counterparts (default: selected)"
+            "or the excluded counterparts. Repeat once per input job, or provide one "
+            "value to apply the same subset to every select_2D source (default: selected)."
         ),
     )
     main.add_argument(
         "--subset-2",
         choices=("selected", "excluded"),
-        help="Subset for --job-dir-2 (default: same value as --subset)",
+        help=argparse.SUPPRESS,
     )
     main.add_argument(
         "--denoise-job-dir",
@@ -1270,24 +1334,21 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help=(
             "Output directory (default: keep the historical <subset>_2d_class_overlay name "
             "for pure Select 2D runs, otherwise use particle_reprojection_overlay; optional "
-            "_<job-dir-2> and _<denoise-job> suffixes are appended when those inputs are used)"
+            "_<job-dir-N> and _<denoise-job> suffixes are appended when those inputs are used)"
         ),
     )
     main.add_argument(
         "--overlay-color",
-        default=DEFAULT_OVERLAY_COLOR,
+        action="append",
         help=(
-            "Overlay color for the primary overlay source. "
-            f"Default: {DEFAULT_OVERLAY_COLOR}"
+            "Overlay color for an overlay source. Repeat once per input job to assign colors "
+            "explicitly in order. If fewer colors than jobs are supplied, the remaining jobs "
+            f"use defaults from {', '.join(DEFAULT_OVERLAY_COLOR_CYCLE)}."
         ),
     )
     main.add_argument(
         "--overlay-color-2",
-        default=DEFAULT_SECONDARY_OVERLAY_COLOR,
-        help=(
-            "Overlay color for --job-dir-2. Ignored unless a second job is supplied. "
-            f"Default: {DEFAULT_SECONDARY_OVERLAY_COLOR}"
-        ),
+        help=argparse.SUPPRESS,
     )
     main.add_argument(
         "--synthetic-background-color",
@@ -1392,7 +1453,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--top-micrographs",
         type=int,
         help=(
-            "Only render the N most populated micrographs. With two jobs, the ranking can "
+            "Only render the N most populated micrographs. With multiple jobs, the ranking can "
             "prioritize balanced overlap instead of plain total count."
         ),
     )
@@ -1469,9 +1530,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
   Overlay two Select 2D jobs into the same micrographs:
     cryosparc-2d-class-overlay \
       --job-dir /path/to/J46 \
-      --job-dir-2 /path/to/J52 \
+      --job-dir /path/to/J52 \
       --overlay-color black \
-      --overlay-color-2 red
+      --overlay-color red
 
   Render per-particle 3D map backprojections from a refinement job:
     cryosparc-2d-class-overlay \
@@ -1482,19 +1543,29 @@ def build_argument_parser() -> argparse.ArgumentParser:
   Combine a Select 2D source with a 3D refinement source:
     cryosparc-2d-class-overlay \
       --job-dir /path/to/J46 \
-      --job-dir-2 /path/to/J95 \
+      --job-dir /path/to/J95 \
       --overlay-color black \
-      --overlay-color-2 red
+      --overlay-color red
+
+  Overlay three sources with explicit per-job colors:
+    cryosparc-2d-class-overlay \
+      --job-dir /path/to/J46 \
+      --job-dir /path/to/J98 \
+      --job-dir /path/to/J95 \
+      --overlay-color black \
+      --overlay-color red \
+      --overlay-color cyan
 
   Force a white background for the synthetic PNGs:
     cryosparc-2d-class-overlay \
       --job-dir /path/to/J46 \
       --synthetic-background-color white
 
-  Prioritize micrographs that keep both jobs well represented:
+  Prioritize micrographs that keep all jobs well represented:
     cryosparc-2d-class-overlay \
       --job-dir /path/to/J46 \
-      --job-dir-2 /path/to/J52 \
+      --job-dir /path/to/J52 \
+      --job-dir /path/to/J95 \
       --top-micrographs 10 \
       --top-micrographs-mode balanced
 
@@ -1534,14 +1605,13 @@ def main() -> None:
     parser = build_argument_parser()
     args = parser.parse_args()
 
-    job_dir = Path(args.job_dir).expanduser().resolve()
-    if not job_dir.exists():
-        fail(f"Job directory not found: {job_dir}")
-    job_dir_2 = None
+    job_dir_values = list(args.job_dir or [])
     if args.job_dir_2:
-        job_dir_2 = Path(args.job_dir_2).expanduser().resolve()
-        if not job_dir_2.exists():
-            fail(f"Second job directory not found: {job_dir_2}")
+        job_dir_values.append(args.job_dir_2)
+    job_dirs = [Path(value).expanduser().resolve() for value in job_dir_values]
+    for job_dir in job_dirs:
+        if not job_dir.exists():
+            fail(f"Job directory not found: {job_dir}")
     denoise_job_dir = None
     if args.denoise_job_dir:
         denoise_job_dir = Path(args.denoise_job_dir).expanduser().resolve()
@@ -1549,7 +1619,6 @@ def main() -> None:
             fail(f"Denoise job directory not found: {denoise_job_dir}")
         validate_denoise_job(denoise_job_dir)
 
-    subset_2 = args.subset_2 or args.subset
     if args.downsample is not None:
         if args.downsample < 1:
             fail("--downsample must be at least 1")
@@ -1580,16 +1649,26 @@ def main() -> None:
     if not (0.0 < args.mask_radius_fraction <= 0.5):
         fail("--mask-radius-fraction must be in the range (0, 0.5]")
 
+    subsets = normalize_source_subsets(len(job_dirs), args.subset, args.subset_2)
+    overlay_colors = normalize_source_colors(
+        len(job_dirs),
+        args.overlay_color,
+        args.overlay_color_2,
+    )
     sources = [
-        load_overlay_source(job_dir, args.subset, args.overlay_color),
+        load_overlay_source(job_dir, subset, overlay_color)
+        for job_dir, subset, overlay_color in zip(
+            job_dirs,
+            subsets,
+            overlay_colors,
+            strict=True,
+        )
     ]
-    if job_dir_2 is not None:
-        sources.append(load_overlay_source(job_dir_2, subset_2, args.overlay_color_2))
-    output_name = default_output_name(sources, args.subset, denoise_job_dir, job_dir_2)
+    output_name = default_output_name(sources, denoise_job_dir)
     output_dir = (
         Path(args.output_dir).expanduser().resolve()
         if args.output_dir
-        else job_dir / output_name
+        else job_dirs[0] / output_name
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     top_micrographs_mode = args.top_micrographs_mode or (

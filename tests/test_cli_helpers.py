@@ -6,9 +6,12 @@ from cryosparc_2d_class_overlay.cli import (
     OverlaySource,
     SOURCE_KIND_REFINE3D,
     SOURCE_KIND_SELECT2D,
+    default_overlay_colors,
     find_latest_job_file,
     harmonic_mean,
     normalize_field_label,
+    normalize_source_colors,
+    normalize_source_subsets,
     parse_rgb_color,
     quantize_pose3d,
     rank_micrograph_items,
@@ -33,6 +36,24 @@ def test_resolve_synthetic_background_color_auto_uses_white_for_dark_overlay():
         [parse_rgb_color("black")],
     )
     assert np.allclose(background, parse_rgb_color("white"))
+
+
+def test_default_overlay_colors_extend_beyond_two_sources():
+    colors = default_overlay_colors(4)
+    assert colors == ["black", "red", "cyan", "yellow"]
+
+
+def test_normalize_source_subsets_repeats_single_value():
+    assert normalize_source_subsets(3, ["excluded"], None) == [
+        "excluded",
+        "excluded",
+        "excluded",
+    ]
+
+
+def test_normalize_source_colors_overrides_first_two_then_fills_defaults():
+    colors = normalize_source_colors(4, ["white"], "lime")
+    assert colors == ["white", "lime", "cyan", "yellow"]
 
 
 def test_rank_micrograph_items_balanced_prefers_shared_signal():

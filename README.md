@@ -1,6 +1,6 @@
 # cryosparc-2d-class-overlay
 
-`cryosparc-2d-class-overlay` is a local-first command-line tool that takes one or two CryoSPARC overlay sources and projects their per-particle signal back onto the original micrographs or onto denoised micrographs.
+`cryosparc-2d-class-overlay` is a local-first command-line tool that takes one or more CryoSPARC overlay sources and projects their per-particle signal back onto the original micrographs or onto denoised micrographs.
 
 Supported source types:
 
@@ -45,7 +45,7 @@ This repository does not contain the original ReconSil source code. It should be
 ## Features
 
 - Works on CryoSPARC `select_2D` jobs and supported 3D refinement jobs directly from disk
-- Supports one or two overlay sources at the same time
+- Supports one or more overlay sources at the same time
 - Supports rendering onto denoised micrographs from a CryoSPARC denoise job
 - Supports per-particle 3D refinement-map backprojections
 - Supports cached 3D backprojections by quantized angular bins for speed
@@ -56,7 +56,7 @@ This repository does not contain the original ReconSil source code. It should be
   - `.blink.gif` by default
   - optional `.count.png`
 - Can rank micrographs by particle abundance
-- Includes a balanced ranking mode for two-job overlays when one job is much rarer than the other
+- Includes a balanced ranking mode for multi-job overlays when one job is much rarer than the others
 - Uses an auto-contrast synthetic background by default so black overlays remain visible
 
 ## Requirements
@@ -114,14 +114,14 @@ cryosparc-2d-class-overlay \
   --job-dir /path/to/CS-project/J119
 ```
 
-### Two Select 2D jobs overlaid into the same micrographs
+### Multiple Select 2D jobs overlaid into the same micrographs
 
 ```bash
 cryosparc-2d-class-overlay \
   --job-dir /path/to/CS-project/J46 \
-  --job-dir-2 /path/to/CS-project/J98 \
+  --job-dir /path/to/CS-project/J98 \
   --overlay-color black \
-  --overlay-color-2 red
+  --overlay-color red
 ```
 
 ### Single 3D refinement job
@@ -148,14 +148,27 @@ cryosparc-2d-class-overlay \
   --denoise-job-dir /path/to/CS-project/J10
 ```
 
-### Rank by the most balanced overlap between two jobs
+### Rank by the most balanced overlap across several jobs
 
 ```bash
 cryosparc-2d-class-overlay \
   --job-dir /path/to/CS-project/J46 \
-  --job-dir-2 /path/to/CS-project/J98 \
+  --job-dir /path/to/CS-project/J98 \
+  --job-dir /path/to/CS-project/J95 \
   --top-micrographs 10 \
   --top-micrographs-mode balanced
+```
+
+### Mix 2D and 3D sources in one render
+
+```bash
+cryosparc-2d-class-overlay \
+  --job-dir /path/to/CS-project/J46 \
+  --job-dir /path/to/CS-project/J98 \
+  --job-dir /path/to/CS-project/J95 \
+  --overlay-color black \
+  --overlay-color red \
+  --overlay-color cyan
 ```
 
 ### Disable GIF output
@@ -174,7 +187,7 @@ By default the tool writes into:
 <job-dir>/<subset>_2d_class_overlay
 ```
 
-If `--job-dir-2` is used, the second job name is appended.
+If additional `--job-dir` sources are used, their job names are appended in order.
 If `--denoise-job-dir` is used, the denoise job name is appended.
 If any source is a 3D refinement job, the default base folder changes to `particle_reprojection_overlay` instead of `<subset>_2d_class_overlay`.
 
