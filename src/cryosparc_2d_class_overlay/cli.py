@@ -22,6 +22,7 @@ from scipy import ndimage
 from scipy.spatial.transform import Rotation
 
 from . import __version__
+from .config import parse_arguments
 
 
 CLI_NAME = "cryosparc-particle-reposition"
@@ -121,8 +122,11 @@ def load_dataset_class():
         fail(
             "cryosparc-tools is required to read CryoSPARC .cs datasets. "
             "Install a version that matches your CryoSPARC minor release, for example "
-            "'pip install \"cryosparc-tools~=5.0.0\"' for CryoSPARC 5.0.x or "
-            "'pip install \"cryosparc-tools~=4.7.0\"' for CryoSPARC 4.7.x."
+            "'python -m pip install \"cryosparc-tools~=5.0.0\"' for CryoSPARC 5.0.x or "
+            "'python -m pip install \"cryosparc-tools~=4.7.0\"' for CryoSPARC 4.7.x. "
+            "Use the same Python environment as this command. "
+            "Installation: https://tools.cryosparc.com/#installation "
+            f"(Python: {sys.executable}; import error: {exc})"
         )
     return Dataset
 
@@ -1355,12 +1359,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "(2D class averages) and 3D refinement jobs (per-particle map projections)."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
     )
+
+    parser.add_argument("--config", help="JSON settings file; CLI options override config values")
 
     required = parser.add_argument_group("Required")
     required.add_argument(
@@ -1675,7 +1682,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = build_argument_parser()
-    args = parser.parse_args()
+    args = parse_arguments(parser)
 
     job_dir_values = list(args.job_dir or [])
     if args.job_dir_2:

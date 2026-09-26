@@ -36,20 +36,24 @@ TOOLS_SPEC=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --cryosparc-tools-spec|--venv-dir|--python)
+      if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then
+        echo "ERROR: $1 requires a value" >&2
+        exit 1
+      fi
+      ;;
+  esac
+  case "$1" in
     --cryosparc-version)
       if [[ $# -lt 2 ]]; then
         echo "ERROR: --cryosparc-version requires a value" >&2
         exit 1
       fi
-      case "$2" in
-        [0-9]*.[0-9]*)
-          TOOLS_SPEC="cryosparc-tools~=$2.0"
-          ;;
-        *)
-          echo "ERROR: --cryosparc-version must look like 4.7 or 5.0" >&2
-          exit 1
-          ;;
-      esac
+      if [[ ! "$2" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo "ERROR: --cryosparc-version must look like 4.7 or 5.0" >&2
+        exit 1
+      fi
+      TOOLS_SPEC="cryosparc-tools~=$2.0"
       shift 2
       ;;
     --cryosparc-tools-spec)
@@ -86,6 +90,7 @@ if [[ -z "${TOOLS_SPEC}" ]]; then
   exit 1
 fi
 
+"${PYTHON_BIN}" -c 'import sys; sys.exit("ERROR: Python 3.10+ is required") if sys.version_info < (3, 10) else None'
 "${PYTHON_BIN}" -m venv "${VENV_DIR}"
 source "${VENV_DIR}/bin/activate"
 python -m pip install --upgrade pip

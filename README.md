@@ -66,9 +66,11 @@ The preferred CLI name is `cryosparc-particle-reposition`. The older `cryosparc-
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+ (Python 3.11 or 3.12 recommended)
 - A local checkout or mounted path that can access the CryoSPARC project directory
-- `cryosparc-tools` installed in the same Python environment
+- An existing **CryoSPARC Tools (`cryosparc-tools`, sometimes called cstools) installation in the same Python environment** as this tool. A Conda environment merely named `cstools` is not sufficient unless the package is installed in it.
+- NumPy, SciPy, and Pillow (installed automatically with this package)
+- Read access to job metadata, `.cs` datasets, referenced class stacks/3D maps, and micrographs; write access to your chosen output directory
 
 Important:
 
@@ -76,11 +78,29 @@ Important:
 - If your CryoSPARC is `5.0.x`, install `cryosparc-tools~=5.0.0`.
 - If your CryoSPARC is `4.7.x`, install `cryosparc-tools~=4.7.0`.
 
-This follows the official CryoSPARC Tools guidance.
+See the official [CryoSPARC Tools installation instructions](https://tools.cryosparc.com/#installation), [Python environment guidance](https://tools.cryosparc.com/#python-environment), and [source repository](https://github.com/cryoem-uoft/cryosparc-tools).
+
+Use a dedicated environment outside the CryoSPARC server installation. This tool only uses the dataset reader: no CryoSPARC server URL, credentials, API login, GPU, CUDA, Slurm, or site-specific software path is needed. Linux and macOS are the primary environments; on Windows use WSL with the project storage mounted there. Memory requirements depend on micrograph/map size and the 3D projection cache; start with one micrograph.
 
 ## Quick Start
 
-### Option 1: bootstrap script
+### Option 1: use an existing CryoSPARC Tools environment
+
+Activate your own virtualenv or Conda environment first (its name/location is up to you):
+
+```bash
+# For example: conda activate YOUR_ENVIRONMENT
+python -c "from cryosparc.dataset import Dataset; import sys; print(sys.executable)"
+python -m pip install "git+https://github.com/mvorlander/cryosparc-particle-reposition.git"
+python -m cryosparc_2d_class_overlay --help
+```
+
+The Git URL installation requires Git. Alternatively clone/download this repository,
+enter its directory, and run `python -m pip install .`.
+The package deliberately does not select a `cryosparc-tools` version automatically:
+your CryoSPARC minor release determines that version.
+
+### Option 2: bootstrap script
 
 Create a virtual environment, install the matching `cryosparc-tools`, and install this package:
 
@@ -98,7 +118,9 @@ For a CryoSPARC `4.7.x` installation:
 ./scripts/bootstrap.sh --cryosparc-version 4.7
 ```
 
-### Option 2: manual installation
+### Option 3: manual installation
+
+From a clone/download of this repository:
 
 ```bash
 python3 -m venv .venv
@@ -109,6 +131,56 @@ python -m pip install .
 ```
 
 Replace `5.0.0` with the minor release that matches your CryoSPARC installation.
+
+## Optional configuration file
+
+Copy [examples/reposition.json](examples/reposition.json) to `reposition.local.json`,
+edit the example paths, then run:
+
+```bash
+cp examples/reposition.json reposition.local.json
+# Edit reposition.local.json to use your own job and output paths.
+cryosparc-particle-reposition --config reposition.local.json
+# Override settings for a quick test:
+cryosparc-particle-reposition --config reposition.local.json --top-micrographs 1 --no-write-gifs
+```
+
+Configuration is plain JSON (no comments). Keys are CLI option names with underscores
+instead of hyphens. All rendering options shown by `--help` are supported.
+Repeatable options (`job_dir`, `subset`, `overlay_color`) use nonempty arrays;
+flags use JSON booleans; numeric settings use JSON numbers. Unknown keys, invalid
+types, and invalid choices are rejected. `config`, `help`, and `version` are not
+configuration keys.
+
+Precedence is **explicit CLI option > config > built-in default**. Repeated CLI
+options replace the entire corresponding config array. Use the same option name
+when overriding; legacy aliases retain their historical behavior.
+Relative job/output directory paths in JSON resolve against the config file's
+folder; CLI paths resolve against the current working directory. `~` is expanded;
+environment variables are not interpolated. No config is loaded automatically.
+`reposition.local.json` is git-ignored to keep local storage paths out of commits.
+There is no cstools installation-path setting: select its Python environment instead.
+
+## Storage and compute environments
+
+Keep the CryoSPARC project directory layout (`project/Jxx/...`) intact. Dataset
+paths relative to the project are resolved against each job's parent directory.
+Absolute paths recorded in `.cs` files are used as recorded; this tool does not
+rewrite them. When moving projects, make those locations available through your
+mount/container bind configuration and preserve symlink targets. Copying only a
+job folder may omit referenced upstream micrographs, stacks, or maps.
+
+For read-only project mounts, always specify a writable `--output-dir`. For example:
+
+```bash
+cryosparc-particle-reposition --job-dir /mounted/project/J46 \
+  --output-dir "$HOME/reposition-output" --max-micrographs 1
+```
+
+On a cluster, activate the environment inside your site's batch script and run the
+same command on a CPU compute node. Request memory/time according to data size;
+there are no built-in scheduler, module, queue, or Conda-prefix assumptions. In a
+container, both the project and all external symlink targets must be accessible.
 
 ## Usage
 
@@ -220,6 +292,20 @@ The output folder also contains `overlay_summary.tsv` with total and per-job par
 - PNG and GIF outputs are full resolution by default. Use `--png-downsample` or `--gif-downsample` only when you explicitly want smaller review files.
 - CryoSPARC motion-corrected micrographs may use MRC mode `12` half-floats; this is supported.
 
+## Troubleshooting
+
+- **Cannot import `cryosparc.dataset`:** activate the environment containing
+  CryoSPARC Tools, install the matching version there, and use
+  `python -m cryosparc_2d_class_overlay` to ensure the same interpreter is used.
+  Check `python -m pip show cryosparc-tools` and `python -m pip check`.
+- **Missing `job.json`, `.cs`, MRC, or symlink target:** check the full project
+  layout and storage mounts described above. An exported particle dataset alone
+  is not a supported job directory.
+- **Permission denied for output:** set `--output-dir` to a writable location.
+- **Memory/time pressure:** begin with `--max-micrographs 1`; use a nonzero
+  `--projection-angle-step-deg` for cached 3D projections. Output downsampling
+  reduces image sizes but does not eliminate full-resolution processing memory.
+
 ## Development
 
 Run the CLI module directly:
@@ -231,7 +317,7 @@ python -m cryosparc_2d_class_overlay --help
 Install development dependencies:
 
 ```bash
-python -m pip install -e .[dev]
+python -m pip install -e ".[dev]"
 ```
 
 Run tests:
@@ -239,3 +325,5 @@ Run tests:
 ```bash
 pytest
 ```
+
+Contributor and coding-agent guidance: [AGENTS.md](AGENTS.md).

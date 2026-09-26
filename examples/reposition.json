@@ -1,0 +1,9 @@
+{
+  "job_dir": ["/path/to/CS-project/J46", "/path/to/CS-project/J98"],
+  "overlay_color": ["black", "red"],
+  "output_dir": "./output",
+  "top_micrographs": 5,
+  "png_downsample": 2,
+  "gif_downsample": 2,
+  "write_gifs": true
+}
